@@ -1,0 +1,5 @@
+{
+  "name": "Sistema de Pedidos",
+  "description": "Um sistema de gerenciamento de pedidos para clientes e administradores.",
+  "requestFramePermissions": []
+}
