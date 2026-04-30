@@ -14,7 +14,7 @@ export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const clientId = searchParams.get('clientId');
-    
+
     // USAR ASPAS DUPLAS para preservar maiúsculas/minúsculas
     let query = `
       SELECT o.*, u.nome as client_nome 
@@ -22,22 +22,35 @@ export async function GET(req: Request) {
       JOIN users u ON o."clientId" = u.id
     `;
     const params = [];
-    
+
     if (clientId) {
       query += ' WHERE o."clientId" = $1';
       params.push(clientId);
     }
-    
+
     query += ' ORDER BY o.created_at DESC';
-    
+
     const result = await pool.query(query, params);
-    
-    // Buscar itens de cada pedido
-    const ordersWithItems = await Promise.all(result.rows.map(async (order) => {
+    const orderIds = result.rows.map((order) => String(order.id));
+
+    let itemsByOrderId = new Map<string, any[]>();
+
+    if (orderIds.length > 0) {
       const itemsResult = await pool.query(
-        'SELECT * FROM order_items WHERE orderid = $1',
-        [order.id]
+        'SELECT * FROM order_items WHERE orderid = ANY($1::text[])',
+        [orderIds]
       );
+
+      itemsByOrderId = itemsResult.rows.reduce((acc, item) => {
+        const key = String(item.orderid);
+        const list = acc.get(key) || [];
+        list.push(item);
+        acc.set(key, list);
+        return acc;
+      }, new Map<string, any[]>());
+    }
+
+    const ordersWithItems = result.rows.map((order) => {
 
       const createdAtRaw = order.created_at;
       const createdAt = typeof createdAtRaw === 'number'
@@ -52,14 +65,17 @@ export async function GET(req: Request) {
         ...order,
         status: normalizedStatus,
         createdAt: Number.isNaN(createdAt) ? Date.now() : createdAt,
-        items: itemsResult.rows
+        items: itemsByOrderId.get(String(order.id)) || []
       };
-    }));
-    
+    });
+
     return NextResponse.json(ordersWithItems);
   } catch (error: any) {
     console.error('Erro em GET /api/orders:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    const message = error?.code === 'ETIMEDOUT'
+      ? 'Falha de conexão com o banco ao buscar pedidos.'
+      : (error?.message || 'Erro interno ao buscar pedidos.');
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 
@@ -67,21 +83,21 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
     console.log('Recebendo pedido:', body);
-    
+
     const { id, clientId, items, total, createdAt } = body;
     const createdAtValue = createdAt ?? Date.now();
     const normalizedStatus = null;
-    
+
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      
+
       // Usar aspas duplas no clientId
       await client.query(
         'INSERT INTO orders (id, "clientId", total, status, created_at) VALUES ($1, $2, $3, $4, $5)',
         [id, clientId, total, normalizedStatus, createdAtValue]
       );
-      
+
       // Inserir itens
       for (const item of items) {
         await client.query(
@@ -90,7 +106,7 @@ export async function POST(req: Request) {
           [id, item.id, item.nome, item.tipo, item.valor, item.quantidade, item.precoNoAto]
         );
       }
-      
+
       await client.query('COMMIT');
       return NextResponse.json({ success: true, orderId: id });
     } catch (error) {
@@ -124,27 +140,6 @@ export async function PUT(req: Request) {
 
     // Fluxo admin: atualização apenas de status.
     if (typeof items === 'undefined' && typeof total === 'undefined') {
-      const currentOrderResult = await pool.query('SELECT status FROM orders WHERE id = $1', [id]);
-      if (currentOrderResult.rows.length === 0) {
-        return NextResponse.json({ error: 'Pedido não encontrado' }, { status: 404 });
-      }
-
-      const currentStatus = currentOrderResult.rows[0].status as string | null;
-      const pendingStatuses = [null, 'PENDENTE', 'Pendente'];
-
-      // Regras: pedido pendente precisa ser aprovado antes de avançar para outros status.
-      if (
-        pendingStatuses.includes(currentStatus) &&
-        !pendingStatuses.includes(normalizedStatus ?? null) &&
-        normalizedStatus !== 'Aprovado' &&
-        normalizedStatus !== 'Cancelado'
-      ) {
-        return NextResponse.json(
-          { error: 'Pedido pendente precisa ser aprovado antes de prosseguir.' },
-          { status: 400 }
-        );
-      }
-
       const result = await pool.query(
         'UPDATE orders SET status = $1 WHERE id = $2 RETURNING *',
         [normalizedStatus ?? null, id]

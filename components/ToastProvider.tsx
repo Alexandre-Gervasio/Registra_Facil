@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useState, useContext, useCallback } from 'react';
+import React, { createContext, useState, useContext, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import Toast, { ToastProps } from './Toast';
 
@@ -24,7 +24,11 @@ interface ToastMessage extends ToastProps {
 
 export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
-  const isBrowser = typeof window !== 'undefined';
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const removeToast = useCallback((id: string) => {
     setToasts((prevToasts) => prevToasts.filter((toast) => toast.id !== id));
@@ -39,7 +43,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     <ToastContext.Provider value={{ addToast }}>
       {children}
 
-      {isBrowser && createPortal(
+      {mounted && createPortal(
         <div className="fixed bottom-4 right-4 z-[9999] space-y-3 pointer-events-none">
           {toasts.map((toast) => (
             <Toast key={toast.id} {...toast} />

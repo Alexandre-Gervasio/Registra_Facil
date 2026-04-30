@@ -116,9 +116,9 @@ const OrderForm = ({ items, addToast, currentUser, setOrders, setCurrentView, fo
     setCart(prev => {
       const existing = prev.find(item => String(item.id) === String(product.id));
       if (existing) {
-        return prev.map(item => 
-          String(item.id) === String(product.id) 
-          ? { ...item, quantidade: item.quantidade + 1 } : item
+        return prev.map(item =>
+          String(item.id) === String(product.id)
+            ? { ...item, quantidade: item.quantidade + 1 } : item
         );
       }
       return [...prev, { ...product, quantidade: 1, precoNoAto: Number(product.valor) }];
@@ -128,53 +128,53 @@ const OrderForm = ({ items, addToast, currentUser, setOrders, setCurrentView, fo
   };
 
   const updateQuantity = (id: string, delta: number) => {
-    setCart(prev => prev.map(item => 
+    setCart(prev => prev.map(item =>
       String(item.id) === String(id) ? { ...item, quantidade: Math.max(0, item.quantidade + delta) } : item
     ).filter(item => item.quantidade > 0));
   };
 
   const handleSaveOrder = async () => {
-      if (cart.length === 0) return addToast('O carrinho está vazio!', 'warning');
-      if (!currentUser) return addToast('Faça login para criar um pedido.', 'warning');
-      
-      const orderData = {
-        id: editingOrderId || generateId(),
-        clientId: currentUser.id,
-        items: cart,
-        total: totalGeral,
-        status: editingOrderId ? undefined : null
-      };
+    if (cart.length === 0) return addToast('O carrinho está vazio!', 'warning');
+    if (!currentUser) return addToast('Faça login para criar um pedido.', 'warning');
 
-      try {
-        addToast('Enviando pedido...', 'info');
-        
-        const response = await fetch('/api/orders', {
-          method: editingOrderId ? 'PUT' : 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(orderData)
-        });
+    const orderData = {
+      id: editingOrderId || generateId(),
+      clientId: currentUser.id,
+      items: cart,
+      total: totalGeral,
+      status: editingOrderId ? undefined : null
+    };
 
-        if (response.ok) {
-          addToast('Pedido finalizado com sucesso!', 'success');
-          
-          // Limpezas
-          setCart([]);
-          localStorage.removeItem('editing_order');
+    try {
+      addToast('Enviando pedido...', 'info');
 
-          // Atualiza a lista global de pedidos
-          const res = await fetch('/api/orders');
-          const updated = await res.json();
-          setOrders(updated);
+      const response = await fetch('/api/orders', {
+        method: editingOrderId ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(orderData)
+      });
 
-          // Volta para a tela de listagem
-          setCurrentView('CLIENT_ORDERS');
-        } else {
-          const err = await response.json();
-          addToast(`Erro: ${err.error || 'Falha ao salvar'}`, 'error');
-        }
-      } catch (e) {
-        addToast('Erro de conexão com o banco', 'error');
+      if (response.ok) {
+        addToast('Pedido finalizado com sucesso!', 'success');
+
+        // Limpezas
+        setCart([]);
+        localStorage.removeItem('editing_order');
+
+        // Atualiza a lista global de pedidos
+        const res = await fetch('/api/orders');
+        const updated = await res.json();
+        setOrders(updated);
+
+        // Volta para a tela de listagem
+        setCurrentView('CLIENT_ORDERS');
+      } else {
+        const err = await response.json();
+        addToast(`Erro: ${err.error || 'Falha ao salvar'}`, 'error');
       }
+    } catch (e) {
+      addToast('Erro de conexão com o banco', 'error');
+    }
   };
 
   return (
@@ -228,6 +228,8 @@ const OrderForm = ({ items, addToast, currentUser, setOrders, setCurrentView, fo
 };
 
 const OrderList = ({ orders, viewRole, users, currentUser, formatCurrency, addToast, setOrders, setCurrentView }: any) => {
+  const [updatingOrderId, setUpdatingOrderId] = useState<string | null>(null);
+
   const visibleOrders = viewRole === 'client'
     ? orders.filter((order: Order) => order.clientId === currentUser?.id)
     : orders;
@@ -238,19 +240,38 @@ const OrderList = ({ orders, viewRole, users, currentUser, formatCurrency, addTo
       .map((item: any) => `${item.quantidade || 0}x ${item.nome || 'Item'}`)
       .join(', ');
   };
-  
-  const handleStatusChange = async (orderId: string, newStatus: string | null) => {
+
+  const handleStatusChange = async (orderId: string, newStatus: string | null, previousStatus: string | null) => {
+    if (updatingOrderId === orderId) return;
+
+    setUpdatingOrderId(orderId);
+
     try {
       const res = await fetch('/api/orders', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: orderId, status: newStatus })
       });
+
+      const payload = await res.json().catch(() => ({}));
+
       if (res.ok) {
-        setOrders((prev: any[]) => prev.map(o => o.id === orderId ? { ...o, status: newStatus } : o));
-        addToast(`Pedido ${newStatus}`, 'info');
+        const persistedStatus = typeof payload?.order?.status === 'undefined'
+          ? newStatus
+          : payload.order.status;
+
+        setOrders((prev: any[]) => prev.map(o => o.id === orderId ? { ...o, status: persistedStatus } : o));
+        addToast(`Pedido atualizado para ${persistedStatus || 'Pendente'}.`, 'success');
+      } else {
+        setOrders((prev: any[]) => prev.map(o => o.id === orderId ? { ...o, status: previousStatus } : o));
+        addToast(payload.error || 'Não foi possível atualizar o status do pedido.', 'error');
       }
-    } catch (e) { addToast('Erro ao atualizar status', 'error'); }
+    } catch (e) {
+      setOrders((prev: any[]) => prev.map(o => o.id === orderId ? { ...o, status: previousStatus } : o));
+      addToast('Erro ao atualizar status', 'error');
+    } finally {
+      setUpdatingOrderId(null);
+    }
   };
 
   const getStatusStyle = (status: string | null) => {
@@ -294,58 +315,61 @@ const OrderList = ({ orders, viewRole, users, currentUser, formatCurrency, addTo
             const isPending = order.status === null || order.status === 'Pendente' || order.status === 'PENDENTE';
             const canEditClientOrder = isPending || order.status === 'Em Preparação';
             return (
-            <tr key={order.id} className="border-b hover:bg-gray-50">
-              {viewRole === 'admin' && <td className="p-3">{users.find((u:any) => u.id === order.clientId)?.nome || 'Cliente'}</td>}
-              <td className="p-3">{formatDateTime(order.createdAt)}</td>
-              {viewRole === 'admin' && <td className="p-3 max-w-md">{getOrderDescription(order)}</td>}
-              <td className="p-3 font-bold">{formatCurrency(order.total)}</td>
-              <td className="p-3">
-                <span className={`px-2 py-1 rounded-full border text-[10px] font-bold uppercase ${getStatusStyle(order.status)}`}>
-                  {order.status || 'Pendente'}
-                </span>
-              </td>
-              <td className="p-3 text-center">
-                {viewRole === 'admin' ? (
-                  <div className="flex items-center justify-center gap-2">
-                    {order.status !== 'Entregue' && (
-                      <button
-                        onClick={() => handleStatusChange(order.id, 'Entregue')}
-                        className="bg-green-600 text-white px-2 py-1 rounded text-xs hover:bg-green-700"
+              <tr key={order.id} className="border-b hover:bg-gray-50">
+                {viewRole === 'admin' && <td className="p-3">{users.find((u: any) => u.id === order.clientId)?.nome || 'Cliente'}</td>}
+                <td className="p-3">{formatDateTime(order.createdAt)}</td>
+                {viewRole === 'admin' && <td className="p-3 max-w-md">{getOrderDescription(order)}</td>}
+                <td className="p-3 font-bold">{formatCurrency(order.total)}</td>
+                <td className="p-3">
+                  <span className={`px-2 py-1 rounded-full border text-[10px] font-bold uppercase ${getStatusStyle(order.status)}`}>
+                    {order.status || 'Pendente'}
+                  </span>
+                </td>
+                <td className="p-3 text-center">
+                  {viewRole === 'admin' ? (
+                    <div className="flex items-center justify-center gap-2">
+                      {order.status !== 'Entregue' && (
+                        <button
+                          onClick={() => handleStatusChange(order.id, 'Entregue', order.status)}
+                          disabled={updatingOrderId === order.id}
+                          className="bg-green-600 text-white px-2 py-1 rounded text-xs hover:bg-green-700"
+                        >
+                          Concluir
+                        </button>
+                      )}
+                      <select
+                        className="border rounded text-xs p-1"
+                        value={order.status || ''}
+                        disabled={updatingOrderId === order.id}
+                        onChange={(e) => handleStatusChange(order.id, e.target.value === '' ? null : e.target.value, order.status)}
                       >
-                        Concluir
-                      </button>
-                    )}
-                    <select 
-                      className="border rounded text-xs p-1"
-                      value={order.status || ''}
-                      onChange={(e) => handleStatusChange(order.id, e.target.value === '' ? null : e.target.value)}
-                    >
-                      <option value="">Pendente</option>
-                      <option value="Aprovado">Aprovado</option>
-                      <option value="Em Preparação">Em Preparação</option>
-                      <option value="Enviado">Enviado</option>
-                      <option value="Entregue">Entregue</option>
-                      <option value="Cancelado">Cancelado</option>
-                    </select>
-                  </div>
-                ) : (
-                  canEditClientOrder ? (
-                    <button
-                      onClick={() => {
-                        localStorage.setItem('editing_order', JSON.stringify(order));
-                        setCurrentView('CLIENT_NEW_ORDER');
-                      }}
-                      className="text-blue-600 hover:underline"
-                    >
-                      Editar
-                    </button>
+                        <option value="">Pendente</option>
+                        <option value="Aprovado">Aprovado</option>
+                        <option value="Em Preparação">Em Preparação</option>
+                        <option value="Enviado">Enviado</option>
+                        <option value="Entregue">Entregue</option>
+                        <option value="Cancelado">Cancelado</option>
+                      </select>
+                    </div>
                   ) : (
-                    <span className="text-gray-400">-</span>
-                  )
-                )}
-              </td>
-            </tr>
-          )})}
+                    canEditClientOrder ? (
+                      <button
+                        onClick={() => {
+                          localStorage.setItem('editing_order', JSON.stringify(order));
+                          setCurrentView('CLIENT_NEW_ORDER');
+                        }}
+                        className="text-blue-600 hover:underline"
+                      >
+                        Editar
+                      </button>
+                    ) : (
+                      <span className="text-gray-400">-</span>
+                    )
+                  )}
+                </td>
+              </tr>
+            )
+          })}
           {visibleOrders.length === 0 && (
             <tr>
               <td className="p-6 text-center text-gray-500" colSpan={viewRole === 'admin' ? 6 : 4}>
@@ -521,7 +545,7 @@ const AdminUsersScreen = ({ users, setUsers, addToast }: AdminUsersScreenProps) 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: editingUserId, nome: editNome, email: editEmail })
       });
-      
+
       if (res.ok) {
         setUsers(users.map(u => u.id === editingUserId ? { ...u, nome: editNome, email: editEmail } : u));
         setEditingUserId(null);
@@ -606,7 +630,7 @@ export default function HomePage() {
   const { addToast } = useToast();
   // --- Estados Principais ---
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [currentView, setCurrentView] = useState<string>('LOGIN'); 
+  const [currentView, setCurrentView] = useState<string>('LOGIN');
 
   // --- Estados do Banco de Dados ---
   const [users, setUsers] = useState<User[]>([]);
@@ -616,18 +640,41 @@ export default function HomePage() {
 
   // Carregar dados do PostgreSQL
   useEffect(() => {
+    const fetchJson = async <T,>(url: string): Promise<T> => {
+      const response = await fetch(url);
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error((data as any)?.error || `Falha ao carregar ${url}`);
+      }
+
+      return data as T;
+    };
+
     const loadData = async () => {
       try {
-        const [u, i, o] = await Promise.all([
-          fetch('/api/users').then(r => r.json()),
-          fetch('/api/items').then(r => r.json()),
-          fetch('/api/orders').then(r => r.json())
+        const [u, i, o] = await Promise.allSettled([
+          fetchJson<User[]>('/api/users'),
+          fetchJson<Item[]>('/api/items'),
+          fetchJson<Order[]>('/api/orders')
         ]);
-        setUsers(u); setItems(i); setOrders(o);
-      } catch (e) { console.error(e); } finally { setLoading(false); }
+
+        if (u.status === 'fulfilled') setUsers(u.value);
+        if (i.status === 'fulfilled') setItems(i.value);
+        if (o.status === 'fulfilled') {
+          setOrders(o.value);
+        } else {
+          addToast(o.reason?.message || 'Não foi possível carregar os pedidos.', 'warning');
+        }
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoading(false);
+      }
     };
+
     loadData();
-  }, []);
+  }, [addToast]);
 
   const handleLogin = async (email: string, senha: string) => {
     const res = await fetch('/api/login', {
@@ -746,12 +793,12 @@ export default function HomePage() {
           <AdminUsersScreen users={users} setUsers={setUsers} addToast={addToast} />
         )}
         {currentView === 'CLIENT_NEW_ORDER' && (
-          <OrderForm 
-            items={items} 
-            addToast={addToast} 
-            currentUser={currentUser} 
-            setOrders={setOrders} 
-            setCurrentView={setCurrentView} 
+          <OrderForm
+            items={items}
+            addToast={addToast}
+            currentUser={currentUser}
+            setOrders={setOrders}
+            setCurrentView={setCurrentView}
             formatCurrency={formatCurrency}
           />
         )}
